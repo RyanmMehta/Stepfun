@@ -22,7 +22,12 @@ export class StepFunError extends Error {
   }
 }
 
-async function request(path: string, init: RequestInit, timeoutMs = TIMEOUT_MS): Promise<Response> {
+async function request(
+  path: string,
+  init: RequestInit,
+  timeoutMs = TIMEOUT_MS,
+  retries = 1,
+): Promise<Response> {
   const key = process.env.STEPFUN_API_KEY?.trim();
   if (!key) throw new StepFunError("STEPFUN_API_KEY is not set", 0);
 
@@ -41,8 +46,8 @@ async function request(path: string, init: RequestInit, timeoutMs = TIMEOUT_MS):
   };
 
   let lastErr: unknown;
-  // One retry on 5xx or network/timeout errors.
-  for (let i = 0; i < 2; i++) {
+  // Retry on 5xx or network errors (callers with a tight time budget pass retries = 0).
+  for (let i = 0; i <= retries; i++) {
     try {
       let res = await attempt(activeBase);
       if (res.status === 401 && activeBase === DEFAULT_BASE_URL) {
@@ -53,7 +58,7 @@ async function request(path: string, init: RequestInit, timeoutMs = TIMEOUT_MS):
           res = alt;
         }
       }
-      if (res.status >= 500 && i === 0) {
+      if (res.status >= 500 && i < retries) {
         lastErr = new StepFunError(`StepFun ${res.status}`, res.status);
         continue;
       }
@@ -63,6 +68,10 @@ async function request(path: string, init: RequestInit, timeoutMs = TIMEOUT_MS):
       }
       return res;
     } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") {
+        // A timeout means the model is slow, not flaky: retrying the same call just doubles the wait.
+        throw new StepFunError(`StepFun timed out after ${Math.round(timeoutMs / 1000)}s`, 504);
+      }
       lastErr = e;
       if (e instanceof StepFunError && e.status && e.status < 500) throw e;
     }
@@ -76,10 +85,11 @@ type ChatOpts = {
   effort?: "low" | "medium" | "high";
   maxTokens?: number;
   timeoutMs?: number;
+  retries?: number;
   json?: boolean;
 };
 
-export async function chat({ system, user, effort = "low", maxTokens = 4000, timeoutMs, json }: ChatOpts) {
+export async function chat({ system, user, effort = "low", maxTokens = 4000, timeoutMs, retries, json }: ChatOpts) {
   const res = await request(
     "/chat/completions",
     {
@@ -97,12 +107,18 @@ export async function chat({ system, user, effort = "low", maxTokens = 4000, tim
       }),
     },
     timeoutMs,
+    retries,
   );
   const j = await res.json();
   const u = j.usage || {};
   recordChat(u.prompt_tokens || 0, u.completion_tokens || 0);
-  const content: string = j.choices?.[0]?.message?.content ?? "";
-  return { content, usage: u };
+  const choice = j.choices?.[0];
+  const content: string = choice?.message?.content ?? "";
+  if (!content.trim()) {
+    // Reasoning models can spend the whole token budget thinking and return no answer.
+    throw new StepFunError(`Model returned no answer (finish_reason: ${choice?.finish_reason ?? "unknown"})`, 502);
+  }
+  return { content, usage: u, finishReason: choice?.finish_reason as string | undefined };
 }
 
 export async function speech(text: string): Promise<ArrayBuffer> {

@@ -23,5 +23,9 @@ export const PRICES = {
 };
 
 export const TIMEOUT_MS = 30_000;
-// The JSON rewrite with medium reasoning can run longer than a single TTS line.
-export const SIMPLIFY_TIMEOUT_MS = 90_000;
+// Total time the server may spend on one rewrite, across all attempts. The browser gives up a bit later
+// (SIMPLIFY_CLIENT_TIMEOUT_MS), so the server always gets to answer with a clear error or the demo lesson.
+export const SIMPLIFY_BUDGET_MS = 85_000;
+// The sample lecture has a hand-written lesson to fall back on, so don't make anyone wait long for it.
+export const SAMPLE_BUDGET_MS = 40_000;
+export const SIMPLIFY_CLIENT_TIMEOUT_MS = 100_000;

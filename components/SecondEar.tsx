@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SAMPLE_LESSON, SAMPLE_TITLE, SAMPLE_TRANSCRIPT } from "@/lib/sample";
+import { SIMPLIFY_CLIENT_TIMEOUT_MS } from "@/lib/config";
 import type { Lesson, Meter } from "@/lib/types";
 import { audioDuration, MAX_SECONDS, startRecording } from "./Recorder";
 import { useVoice } from "./useVoice";
@@ -25,6 +26,10 @@ export default function SecondEar() {
   const [recSeconds, setRecSeconds] = useState(0);
   const [openTerm, setOpenTerm] = useState<number | null>(null);
   const [quizStarted, setQuizStarted] = useState(false);
+  const [retryText, setRetryText] = useState("");
+  // Bumped on every reset, so a slow request that finishes after "Start over" can't overwrite the screen.
+  const runRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
   const recRef = useRef<Awaited<ReturnType<typeof startRecording>> | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const originalRef = useRef<HTMLAudioElement>(null);
@@ -58,7 +63,15 @@ export default function SecondEar() {
   }, []);
 
   const reset = () => {
+    runRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
     voice.stop();
+    originalRef.current?.pause();
+    // Leaving mid-recording must release the microphone too.
+    const r = recRef.current;
+    recRef.current = null;
+    r?.stop().catch(() => {});
     setPhase("input");
     setSource(null);
     setTranscript("");
@@ -67,26 +80,70 @@ export default function SecondEar() {
     setAsrNote("");
     setOpenTerm(null);
     setQuizStarted(false);
+    setRetryText("");
   };
 
-  async function simplify(text: string) {
-    setPhase("simplifying");
+  // fetch + JSON with a hard deadline, so a hung request can never leave the loader spinning forever.
+  async function postJson(url: string, body: BodyInit, timeoutMs: number, json = false) {
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    const timer = setTimeout(() => ctrl.abort(new DOMException("timeout", "TimeoutError")), timeoutMs);
     try {
-      const res = await fetch("/api/simplify", {
+      const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript: text }),
+        body,
+        signal: ctrl.signal,
+        ...(json ? { headers: { "Content-Type": "application/json" } } : {}),
       });
-      const j = await res.json();
-      if (j.meter) setMeter(j.meter);
-      if (!res.ok) throw new Error(j.error || "Rewrite failed");
-      if (j.demo) setDemoMode(true);
-      setLesson(j.lesson);
-      setPhase("ready");
-      // Warm the first two lines so Listen starts instantly.
-      j.lesson.sentences.slice(0, 2).forEach((s: string) => voice.prefetch(s));
+      const raw = await res.text();
+      let j: Record<string, unknown>;
+      try {
+        j = JSON.parse(raw);
+      } catch {
+        throw new Error(`server error ${res.status}`);
+      }
+      if (j.meter) setMeter(j.meter as Meter);
+      if (!res.ok || j.error) throw new Error(String(j.error || `server error ${res.status}`));
+      return j;
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (ctrl.signal.aborted && ctrl.signal.reason instanceof DOMException && ctrl.signal.reason.name === "TimeoutError") {
+        throw new Error("the server took too long to answer");
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+      if (abortRef.current === ctrl) abortRef.current = null;
+    }
+  }
+
+  function showLesson(l: Lesson) {
+    setLesson(l);
+    setPhase("ready");
+    // Warm the first two lines so Listen starts instantly.
+    l.sentences.slice(0, 2).forEach((s) => voice.prefetch(s));
+  }
+
+  async function simplify(text: string) {
+    const run = runRef.current;
+    setPhase("simplifying");
+    setError("");
+    setRetryText("");
+    try {
+      const j = await postJson("/api/simplify", JSON.stringify({ transcript: text }), SIMPLIFY_CLIENT_TIMEOUT_MS, true);
+      if (run !== runRef.current) return;
+      setDemoMode(Boolean(j.demo) || live === false);
+      showLesson(j.lesson as Lesson);
+    } catch (e) {
+      if (run !== runRef.current) return;
+      if (text === SAMPLE_TRANSCRIPT) {
+        // The sample has a hand-written lesson: never strand anyone on it.
+        setDemoMode(true);
+        showLesson(SAMPLE_LESSON);
+        return;
+      }
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(`Couldn't rewrite the lecture (${msg}). Your transcript is kept, so you can try again.`);
+      setRetryText(text);
       setPhase("input");
     }
   }
@@ -105,21 +162,18 @@ export default function SecondEar() {
   }
 
   async function transcribeBlob(blob: Blob, filename: string, seconds: number, browserFallback = "") {
+    const run = runRef.current;
     setPhase("transcribing");
     setError("");
+    let j: Record<string, unknown>;
     try {
       if (live === false) throw new Error("no-key");
       const form = new FormData();
       form.append("file", blob, filename);
       form.append("seconds", String(Math.round(seconds)));
-      const res = await fetch("/api/transcribe", { method: "POST", body: form });
-      const j = await res.json();
-      if (j.meter) setMeter(j.meter);
-      if (!res.ok) throw new Error(j.error || "Transcription failed");
-      setTranscript(j.text);
-      setAsrNote(`Transcribed by StepFun ${j.model}`);
-      await simplify(j.text);
+      j = await postJson("/api/transcribe", form, 150_000);
     } catch (e) {
+      if (run !== runRef.current) return;
       if (browserFallback) {
         setTranscript(browserFallback);
         setAsrNote("StepFun ASR unavailable: using your browser's speech recognition");
@@ -138,12 +192,20 @@ export default function SecondEar() {
           : `Couldn't transcribe that clip (${msg}). Try another clip or the sample lecture.`,
       );
       setPhase("input");
+      return;
     }
+    if (run !== runRef.current) return;
+    setTranscript(String(j.text));
+    setAsrNote(`Transcribed by StepFun ${j.model}`);
+    // Outside the try above, so a rewrite failure shows its own message instead of "couldn't transcribe".
+    await simplify(String(j.text));
   }
 
   async function onUpload(file: File) {
     reset();
+    const run = runRef.current;
     const seconds = await audioDuration(file);
+    if (run !== runRef.current) return;
     if (seconds > MAX_SECONDS + 30) {
       setError("That clip is longer than 3 minutes. Trim it to the part you missed and try again.");
       return;
@@ -158,7 +220,13 @@ export default function SecondEar() {
     setError("");
     try {
       setRecSeconds(0);
-      recRef.current = await startRecording(setRecSeconds, () => stopRec());
+      const run = runRef.current;
+      const rec = await startRecording(setRecSeconds, () => stopRec());
+      if (run !== runRef.current) {
+        rec.stop().catch(() => {});
+        return;
+      }
+      recRef.current = rec;
       setPhase("recording");
     } catch {
       setError("Microphone blocked. Allow mic access in your browser, or upload a file instead.");
@@ -169,7 +237,9 @@ export default function SecondEar() {
     const r = recRef.current;
     if (!r) return;
     recRef.current = null;
+    const run = runRef.current;
     const rec = await r.stop();
+    if (run !== runRef.current) return;
     const url = URL.createObjectURL(rec.blob);
     setSource({ kind: "record", title: `Recording · ${fmt(rec.seconds)}`, audioUrl: url });
     await transcribeBlob(rec.blob, `recording.${rec.ext}`, rec.seconds, rec.browserTranscript);
@@ -333,12 +403,20 @@ export default function SecondEar() {
           )}
 
           {error && (
-            <p role="alert" className="rise shake mt-6 rounded-xl border border-bad/30 bg-bad-soft px-4 py-3 text-bad">
-              {error}
-            </p>
+            <div role="alert" className="rise shake mt-6 rounded-xl border border-bad/30 bg-bad-soft px-4 py-3 text-bad flex flex-wrap items-center gap-3">
+              <span className="flex-1 min-w-48">{error}</span>
+              {retryText && (
+                <button
+                  onClick={() => simplify(retryText)}
+                  className="shrink-0 rounded-full bg-ink text-paper px-4 py-1.5 text-sm font-bold transition hover:-translate-y-px active:scale-[0.97]"
+                >
+                  Try again
+                </button>
+              )}
+            </div>
           )}
 
-          {busy && <Loading phase={phase} transcript={phase === "simplifying" ? transcript : ""} />}
+          {busy && <Loading phase={phase} transcript={phase === "simplifying" ? transcript : ""} onCancel={reset} />}
 
           {lesson && (
             <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)]">
@@ -469,7 +547,7 @@ export default function SecondEar() {
                 <div className="flex flex-wrap gap-2">
                   {lesson.glossary.map((g, i) => (
                     <button
-                      key={g.term}
+                      key={`${i}-${g.term}`}
                       onClick={() => setOpenTerm(openTerm === i ? null : i)}
                       aria-expanded={openTerm === i}
                       className={`rounded-full border px-4 py-1.5 text-lg transition-all duration-200 active:scale-95 ${
@@ -671,7 +749,7 @@ const STEPS: { phase: Phase; label: string; hint: string }[] = [
   { phase: "ready", label: "Listen", hint: "" },
 ];
 
-function Loading({ phase, transcript }: { phase: Phase; transcript: string }) {
+function Loading({ phase, transcript, onCancel }: { phase: Phase; transcript: string; onCancel: () => void }) {
   const [secs, setSecs] = useState(0);
   useEffect(() => {
     setSecs(0);
@@ -698,6 +776,14 @@ function Loading({ phase, transcript }: { phase: Phase; transcript: string }) {
         <span className="ml-auto text-muted tabular-nums">{secs}s</span>
       </ol>
       <p className="mt-5 text-xl font-bold">{STEPS[at]?.hint}</p>
+      {secs >= 60 && (
+        <p className="mt-2 text-muted">
+          Taking longer than usual. Still working, and it will stop on its own if StepFun doesn&apos;t answer.{" "}
+          <button onClick={onCancel} className="underline underline-offset-2 hover:text-ink">
+            Cancel
+          </button>
+        </p>
+      )}
       <div className="mt-6 space-y-3" aria-hidden="true">
         {[92, 78, 85, 60].map((w, i) => (
           <div key={i} className="skeleton h-6 rounded-lg" style={{ width: `${w}%` }} />

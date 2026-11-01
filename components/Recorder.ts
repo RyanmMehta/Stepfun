@@ -75,7 +75,7 @@ export async function startRecording(onTick: (s: number) => void, onAutoStop: ()
       try {
         sr?.stop();
       } catch {}
-      rec.onstop = () => {
+      const finish = () => {
         stream.getTracks().forEach((t) => t.stop());
         resolve({
           blob: new Blob(chunks, { type: rec.mimeType || mime || "audio/webm" }),
@@ -84,7 +84,10 @@ export async function startRecording(onTick: (s: number) => void, onAutoStop: ()
           browserTranscript: browserText.trim(),
         });
       };
+      rec.onstop = finish;
+      // Already stopped (e.g. the mic was unplugged): onstop won't fire again, so finish now.
       if (rec.state !== "inactive") rec.stop();
+      else finish();
     });
 
   return { stop };
