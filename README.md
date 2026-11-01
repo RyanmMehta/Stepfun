@@ -41,10 +41,10 @@ Click **Try the sample lecture** for the stage demo. With no API key, the whole 
 | Model | Role in Second Ear | Endpoint |
 |---|---|---|
 | `stepaudio-3-asr-max` (fallback `stepaudio-2.5-asr`) | Lecture transcription: audio in | `POST /v1/audio/transcriptions` |
-| `step-3.7-flash`, `reasoning_effort: medium` | Plain-English re-delivery, glossary, key points, comprehension quiz (strict JSON) | `POST /v1/chat/completions` |
+| `step-3.7-flash`, `reasoning_effort: low` | Plain-English re-delivery, glossary, key points, comprehension quiz (strict JSON) | `POST /v1/chat/completions` |
 | `stepaudio-3-tts` (voice `elegantgentle-female`) | Slowed sentence-by-sentence voice re-delivery and term pronunciation: audio out | `POST /v1/audio/speech` |
 
-All calls go through one server-side helper (`lib/stepfun.ts`): 30 s timeouts (90 s for the reasoning rewrite), one retry on 5xx, automatic fallback to the `step_plan` base URL only on a 401, token usage captured for the meter. The key never reaches the browser.
+All calls go through one server-side helper (`lib/stepfun.ts`): 30 s timeouts, one retry on 5xx (the rewrite instead gets two capped attempts, ~90 s total), automatic fallback to the `step_plan` base URL only on a 401, token usage captured for the meter. The key never reaches the browser.
 
 ## Reliability
 

@@ -23,5 +23,6 @@ export const PRICES = {
 };
 
 export const TIMEOUT_MS = 30_000;
-// The JSON rewrite with medium reasoning can run longer than a single TTS line.
-export const SIMPLIFY_TIMEOUT_MS = 90_000;
+// The JSON rewrite runs longer than a single TTS line. Two attempts at these limits keep the
+// whole rewrite under ~90 s, so the screen never sits on "Rewriting" for minutes.
+export const SIMPLIFY_TIMEOUT_MS = [55_000, 35_000];

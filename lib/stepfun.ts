@@ -22,7 +22,7 @@ export class StepFunError extends Error {
   }
 }
 
-async function request(path: string, init: RequestInit, timeoutMs = TIMEOUT_MS): Promise<Response> {
+async function request(path: string, init: RequestInit, timeoutMs = TIMEOUT_MS, retry = true): Promise<Response> {
   const key = process.env.STEPFUN_API_KEY?.trim();
   if (!key) throw new StepFunError("STEPFUN_API_KEY is not set", 0);
 
@@ -41,8 +41,8 @@ async function request(path: string, init: RequestInit, timeoutMs = TIMEOUT_MS):
   };
 
   let lastErr: unknown;
-  // One retry on 5xx or network/timeout errors.
-  for (let i = 0; i < 2; i++) {
+  // One retry on 5xx or network/timeout errors, unless the caller handles retries itself.
+  for (let i = 0; i < (retry ? 2 : 1); i++) {
     try {
       let res = await attempt(activeBase);
       if (res.status === 401 && activeBase === DEFAULT_BASE_URL) {
@@ -77,9 +77,10 @@ type ChatOpts = {
   maxTokens?: number;
   timeoutMs?: number;
   json?: boolean;
+  retry?: boolean;
 };
 
-export async function chat({ system, user, effort = "low", maxTokens = 4000, timeoutMs, json }: ChatOpts) {
+export async function chat({ system, user, effort = "low", maxTokens = 4000, timeoutMs, json, retry }: ChatOpts) {
   const res = await request(
     "/chat/completions",
     {
@@ -97,11 +98,14 @@ export async function chat({ system, user, effort = "low", maxTokens = 4000, tim
       }),
     },
     timeoutMs,
+    retry,
   );
   const j = await res.json();
   const u = j.usage || {};
   recordChat(u.prompt_tokens || 0, u.completion_tokens || 0);
   const content: string = j.choices?.[0]?.message?.content ?? "";
+  // Reasoning can spend the whole token budget and leave no answer; say so instead of failing to parse "".
+  if (!content.trim()) throw new StepFunError(`Empty reply (finish_reason: ${j.choices?.[0]?.finish_reason})`);
   return { content, usage: u };
 }
 

@@ -45,11 +45,12 @@ export async function POST(req: Request) {
       const { content } = await chat({
         system: SIMPLIFY_SYSTEM,
         user: `Lecture transcript:\n"""${text.slice(0, 12000)}"""`,
-        // Medium reasoning first; if that fails, a faster low-effort retry keeps the demo moving.
-        effort: i === 0 ? "medium" : "low",
+        // Low reasoning keeps the rewrite fast; the generous token cap leaves room for the JSON after reasoning.
+        effort: "low",
         json: true,
-        maxTokens: 6000,
-        timeoutMs: SIMPLIFY_TIMEOUT_MS,
+        maxTokens: 12000,
+        timeoutMs: SIMPLIFY_TIMEOUT_MS[i],
+        retry: false,
       });
       const lesson = parseLesson(content);
       cache.set(key, lesson);
