@@ -31,7 +31,7 @@ export async function POST(req: Request) {
   const key = `${PROMPT_VERSION}:${text}`;
   let hit = cache.get(key);
   if (!hit) {
-    const disk = readCache("lessons", key, "json");
+    const disk = await readCache("lessons", key, "json");
     if (disk) {
       hit = JSON.parse(disk.toString()) as Lesson;
       cache.set(key, hit);
@@ -54,7 +54,7 @@ export async function POST(req: Request) {
       });
       const lesson = parseLesson(content);
       cache.set(key, lesson);
-      writeCache("lessons", key, "json", JSON.stringify(lesson));
+      await writeCache("lessons", key, "json", JSON.stringify(lesson));
       return NextResponse.json({ lesson, demo: false, meter: snapshot() });
     } catch (e) {
       lastErr = e instanceof Error ? e.message : String(e);

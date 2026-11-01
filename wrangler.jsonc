@@ -5,5 +5,7 @@
   "compatibility_date": "2025-09-01",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  // Rewrites and voiced lines, so the sample and replays load instantly.
+  "kv_namespaces": [{ "binding": "SECOND_EAR_CACHE", "id": "b75b8d47b27c4a7fb21beef46aee14b4" }],
   "vars": { "STEPFUN_BASE_URL": "https://api.stepfun.ai/v1" }
 }

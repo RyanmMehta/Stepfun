@@ -51,7 +51,7 @@ All calls go through one server-side helper (`lib/stepfun.ts`): 30 s timeouts, o
 - **Demo mode:** no key, or the rewrite fails twice on the sample → canned sample lesson with a visible banner.
 - **TTS fails** → the browser's `speechSynthesis` reads the lines, so Listen never dies.
 - **ASR fails on a recording** → the transcript captured by the browser's Web Speech API during recording (Chromium) is used instead.
-- **Caching:** every rewrite and every voiced sentence is cached in memory and on disk (`.cache/`), so replays, reloads, and the stage demo after rehearsal cost nothing and load instantly.
+- **Caching:** every rewrite and every voiced sentence is cached in memory and in Cloudflare KV (on disk in `.cache/` when run locally), so replays, reloads, and the stage demo after rehearsal cost nothing and load instantly.
 - Price assumptions for the meter live in one object in `lib/config.ts`.
 
 ## Judging map

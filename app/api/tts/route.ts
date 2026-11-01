@@ -19,11 +19,11 @@ export async function POST(req: Request) {
   try {
     let audio = cache.get(input);
     if (!audio) {
-      const disk = readCache("tts", input, "mp3");
+      const disk = await readCache("tts", input, "mp3");
       audio = disk
         ? (disk.buffer.slice(disk.byteOffset, disk.byteOffset + disk.byteLength) as ArrayBuffer)
         : await speech(input);
-      if (!disk) writeCache("tts", input, "mp3", Buffer.from(audio));
+      if (!disk) await writeCache("tts", input, "mp3", Buffer.from(audio));
       cache.set(input, audio);
     }
     const m = snapshot();
