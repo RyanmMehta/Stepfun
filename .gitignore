@@ -43,3 +43,7 @@ next-env.d.ts
 
 # local result cache
 /.cache
+
+# cloudflare
+/.open-next
+/.wrangler
